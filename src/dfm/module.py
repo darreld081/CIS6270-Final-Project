@@ -1,9 +1,4 @@
-"""LightningModule wrapping the denoiser, the mask path, and the Eq. (7) loss.
-
-Hyperparameters arrive as plain keyword arguments and are recorded into the
-checkpoint by ``save_hyperparameters()``, so a checkpoint is self-describing
-for the section A.4 reproducibility record.
-"""
+"""LightningModule wrapping the denoiser, the mask path, and the Eq. (7) loss."""
 
 from __future__ import annotations
 
@@ -15,22 +10,14 @@ import torch
 from torch import Tensor
 from torch.optim.lr_scheduler import LambdaLR
 
-from .alphabet import MASK_ID
-from .model import DEFAULT_DILATIONS, CNNDenoiser, count_parameters
+from .model import DEFAULT_DILATIONS, CNNDenoiser
 from .path import as_ids, masked_cross_entropy, sample_t, sample_x_t
 
 __all__ = ["MaskedDFM"]
 
 
 class MaskedDFM(pl.LightningModule):
-    """Masked discrete flow matching on 200 bp DNA.
-
-    Validation uses a *fixed* masking pattern per batch index, reseeded
-    identically every epoch. With freshly drawn times and masks each epoch the
-    validation loss carries enough sampling noise to make `save_top_k=1`
-    partly a lottery; holding the pattern fixed means successive epochs are
-    compared on the same problem.
-    """
+    """Masked discrete flow matching on 200 bp DNA."""
 
     def __init__(
         self,
@@ -47,7 +34,6 @@ class MaskedDFM(pl.LightningModule):
         eps: float = 1e-8,
         warmup_frac: float = 0.1,
         min_lr_scale: float = 0.1,
-        val_seed: int = 1234,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -61,41 +47,14 @@ class MaskedDFM(pl.LightningModule):
             center_logits=center_logits,
         )
 
-    # --- plumbing -----------------------------------------------------------
-
     def forward(self, x: Tensor, t: Tensor | float) -> Tensor:
         return self.model(x, t)
 
-    @property
-    def num_parameters(self) -> int:
-        return count_parameters(self.model)
-
-    @staticmethod
-    def _unpack(batch) -> Tensor:
-        """Accept a bare tensor or a one-element tuple from the DataLoader."""
-        if isinstance(batch, (tuple, list)):
-            batch = batch[0]
-        return as_ids(batch)
-
-    def _val_generator(self, batch_idx: int, device: torch.device) -> torch.Generator:
-        generator = torch.Generator(device=device)
-        generator.manual_seed(self.hparams.val_seed * 100_003 + batch_idx)
-        return generator
-
-    # --- steps --------------------------------------------------------------
-
-    def _shared_step(
-        self, x_1: Tensor, generator: torch.Generator | None = None
-    ) -> tuple[Tensor, Tensor, Tensor]:
-        t = sample_t(x_1.shape[0], device=x_1.device, generator=generator)
-        x_t = sample_x_t(x_1, t, generator=generator)
-        logits = self.model(x_t, t)
-        loss = masked_cross_entropy(logits, x_1, x_t)
-        return loss, logits, x_t
-
     def training_step(self, batch, batch_idx: int) -> Tensor:
-        x_1 = self._unpack(batch)
-        loss, _, _ = self._shared_step(x_1)
+        x_1 = as_ids(batch)
+        t = sample_t(x_1.shape[0], device=x_1.device)
+        x_t = sample_x_t(x_1, t)
+        loss = masked_cross_entropy(self.model(x_t, t), x_1, x_t)
         self.log(
             "train_loss",
             loss,
@@ -105,26 +64,6 @@ class MaskedDFM(pl.LightningModule):
             batch_size=x_1.shape[0],
         )
         return loss
-
-    def validation_step(self, batch, batch_idx: int) -> Tensor:
-        x_1 = self._unpack(batch)
-        generator = self._val_generator(batch_idx, x_1.device)
-        loss, logits, x_t = self._shared_step(x_1, generator=generator)
-
-        masked = x_t == MASK_ID
-        correct = (logits.argmax(dim=-1) == x_1) & masked
-        # Accuracy over masked positions only; visible positions are given.
-        accuracy = correct.sum() / masked.sum().clamp(min=1)
-
-        self.log(
-            "val_loss", loss, prog_bar=True, on_epoch=True, batch_size=x_1.shape[0]
-        )
-        self.log(
-            "val_acc", accuracy, prog_bar=True, on_epoch=True, batch_size=x_1.shape[0]
-        )
-        return loss
-
-    # --- optimization -------------------------------------------------------
 
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(

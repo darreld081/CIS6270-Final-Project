@@ -27,7 +27,6 @@ __all__ = [
     "decode_many",
     "is_valid",
     "revcomp",
-    "revcomp_ids",
     "canonical",
 ]
 
@@ -51,10 +50,6 @@ for _i, _c in enumerate(TOKENS):
     _ENCODE_LUT[ord(_c.lower())] = _i
 
 _DECODE_LUT = np.frombuffer(TOKENS.encode("ascii"), dtype=np.uint8)
-
-# Watson-Crick complement in id space: A<->T (0<->3), C<->G (1<->2); mask is
-# its own complement.
-_COMPLEMENT_IDS = np.array([3, 2, 1, 0, MASK_ID], dtype=np.int8)
 
 _REVCOMP_TABLE = str.maketrans("ACGTMacgtm", "TGCAMTGCAM")
 
@@ -131,12 +126,6 @@ def decode_many(ids: np.ndarray) -> list[str]:
 def revcomp(seq: str) -> str:
     """Reverse complement of a sequence string."""
     return seq.translate(_REVCOMP_TABLE)[::-1]
-
-
-def revcomp_ids(ids: np.ndarray) -> np.ndarray:
-    """Reverse complement in id space, along the last axis."""
-    ids = np.asarray(ids)
-    return _COMPLEMENT_IDS[ids.astype(np.intp)][..., ::-1]
 
 
 def canonical(seq: str) -> str:

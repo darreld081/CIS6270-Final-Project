@@ -1,6 +1,6 @@
 """Time-conditioned residual dilated CNN denoiser.
 
-Adapted from the ``CNNModel`` released with MOG-DFM (``models/base_models.py``),
+Adapted from the ``CNNModel`` released with MOG-DFM,
 with two changes for masked discrete flow matching:
 
 * the token embedding has **5** entries (A/C/G/T/M) rather than 4, so the mask
@@ -26,7 +26,7 @@ from torch import Tensor, nn
 from .alphabet import NUM_BASES, VOCAB_SIZE
 from .path import as_ids
 
-__all__ = ["GaussianFourierProjection", "CNNDenoiser", "count_parameters"]
+__all__ = ["GaussianFourierProjection", "CNNDenoiser"]
 
 DEFAULT_DILATIONS: tuple[int, ...] = (1, 1, 4, 16, 64)
 
@@ -130,13 +130,6 @@ class CNNDenoiser(nn.Module):
             nn.Conv1d(hidden_dim, NUM_BASES, kernel_size=1),
         )
 
-    @property
-    def receptive_field(self) -> int:
-        """Number of input positions influencing one output position."""
-        span = self.kernel_size - 1  # the stem
-        span += sum(d * (self.kernel_size - 1) for d in self.dilations)
-        return span + 1
-
     def _time_vector(self, t: Tensor | float, batch_size: int, device: torch.device) -> Tensor:
         if not isinstance(t, Tensor):
             t = torch.as_tensor(t, device=device, dtype=torch.float32)
@@ -166,11 +159,3 @@ class CNNDenoiser(nn.Module):
         if self.center_logits:
             logits = logits - logits.mean(dim=-1, keepdim=True)
         return logits
-
-
-def count_parameters(module: nn.Module, trainable_only: bool = True) -> int:
-    """Total number of parameters, for the run record."""
-    params = module.parameters()
-    if trainable_only:
-        params = (p for p in params if p.requires_grad)
-    return sum(p.numel() for p in params)
