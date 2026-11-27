@@ -26,6 +26,7 @@ __all__ = [
     "mean_pairwise_hamming",
     "memorization_fraction",
     "uniform_random_sequences",
+    "frechet_distance",
     "evaluate",
 ]
 
@@ -186,6 +187,38 @@ def uniform_random_sequences(
     """
     rng = rng or np.random.default_rng(0)
     return rng.integers(0, NUM_BASES, size=(num_sequences, seq_length), dtype=np.int8)
+
+
+def frechet_distance(emb_a: np.ndarray, emb_b: np.ndarray) -> float:
+    """Squared Fréchet distance between Gaussians fitted to two embedding sets.
+
+    ``||mu_a - mu_b||^2 + Tr(S_a) + Tr(S_b) - 2 Tr((S_a S_b)^{1/2})``, the
+    formula behind FID and FBD. The trace of the matrix square root is taken
+    from the eigenvalues of the symmetric ``S_a^{1/2} S_b S_a^{1/2}``, which
+    shares its spectrum with ``S_a S_b`` and avoids a scipy dependency.
+
+    The estimate is biased upward at small N, so only compare scores computed
+    from equal-sized sets.
+    """
+    a = np.asarray(emb_a, dtype=np.float64)
+    b = np.asarray(emb_b, dtype=np.float64)
+    if a.ndim != 2 or b.ndim != 2:
+        raise ValueError(f"expected (N, D) arrays, got {a.shape} and {b.shape}")
+    if a.shape[1] != b.shape[1]:
+        raise ValueError(f"embedding dims differ: {a.shape[1]} vs {b.shape[1]}")
+    if a.shape[0] < 2 or b.shape[0] < 2:
+        raise ValueError("need at least two embeddings per set")
+
+    mu_a, mu_b = a.mean(axis=0), b.mean(axis=0)
+    cov_a, cov_b = np.cov(a, rowvar=False), np.cov(b, rowvar=False)
+
+    w, v = np.linalg.eigh(cov_a)
+    sqrt_a = (v * np.sqrt(np.clip(w, 0, None))) @ v.T
+    middle = sqrt_a @ cov_b @ sqrt_a
+    trace_sqrt = np.sqrt(np.clip(np.linalg.eigvalsh((middle + middle.T) / 2), 0, None)).sum()
+
+    diff = mu_a - mu_b
+    return float(diff @ diff + np.trace(cov_a) + np.trace(cov_b) - 2.0 * trace_sqrt)
 
 
 def evaluate(

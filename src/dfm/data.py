@@ -30,6 +30,8 @@ __all__ = [
     "download",
     "load_table",
     "build_splits",
+    "CELL_TAGS",
+    "build_labeled_splits",
 ]
 
 SOURCE_URL = (
@@ -40,6 +42,14 @@ RAW_FILENAME = "dhs.txt"
 
 #: Value of the ``TAG`` column identifying K562 rows.
 K562_TAG = "K562_ENCLB843GMH"
+
+#: All four cell lines in the table; a row's label is its index here.
+CELL_TAGS = (
+    "GM12878_ENCLB441ZZZ",
+    "hESCT0_ENCLB449ZZZ",
+    K562_TAG,
+    "HepG2_ENCLB029COU",
+)
 
 TEST_CHROMOSOMES = ("chr1",)
 VAL_CHROMOSOMES = ("chr2",)
@@ -127,3 +137,46 @@ def build_splits(
         )
         for name in SPLITS
     }
+
+
+def build_labeled_splits(
+    frame: pd.DataFrame,
+    seq_length: int = SEQ_LENGTH,
+    cell_tags: tuple[str, ...] = CELL_TAGS,
+) -> dict[str, tuple[np.ndarray, np.ndarray]]:
+    """All four cell lines with labels, for the FBD embedding classifier.
+
+    Uses the same chromosome split and canonical grouping as
+    :func:`build_splits`, so every K562 test sequence is also held out from
+    the classifier. Groups whose rows carry different labels are dropped as
+    ambiguous.
+
+    Returns a dict mapping each split name to ``(X int8[N, L], y int64[N])``,
+    where ``y`` indexes into ``cell_tags``.
+    """
+    frame = frame[frame["TAG"].isin(cell_tags)].copy()
+    if frame.empty:
+        raise ValueError(f"no rows with TAG in {cell_tags!r}")
+
+    frame["sequence"] = frame["sequence"].str.upper()
+    frame = frame[frame["sequence"].map(lambda s: is_valid(s, length=seq_length))].copy()
+    frame["label"] = frame["TAG"].map({tag: i for i, tag in enumerate(cell_tags)})
+    frame["canonical"] = frame["sequence"].map(canonical)
+    frame["split"] = frame["chr"].map(_assign_split)
+
+    groups = frame.groupby("canonical")
+    frame = frame[groups["label"].transform("nunique") == 1].copy()
+    priority = frame["split"].map(_SPLIT_PRIORITY)
+    frame["group_split"] = (
+        priority.groupby(frame["canonical"]).transform("min").map(_PRIORITY_SPLIT)
+    )
+    frame = frame.drop_duplicates(subset="canonical", keep="first")
+
+    out = {}
+    for name in SPLITS:
+        part = frame[frame["group_split"] == name]
+        out[name] = (
+            encode_many(part["sequence"].tolist(), length=seq_length),
+            part["label"].to_numpy(dtype=np.int64),
+        )
+    return out
